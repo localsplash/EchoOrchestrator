@@ -80,7 +80,6 @@ services:
     hostname: echo-service
     environment:
       PORT: "8080"
-      SETTINGS_MODE: platform
       DB_HOST: echo-database
       DB_USER: ${MYSQL_USER:-echo_app}
       DB_PASSWORD: ${MYSQL_PASSWORD}
@@ -109,7 +108,6 @@ services:
     environment:
       TZ: America/Los_Angeles
       PORT: "3160"
-      SETTINGS_MODE: platform
       DB_HOST: echo-database
       DB_USER: ${MYSQL_USER:-echo_app}
       DB_PASSWORD: ${MYSQL_PASSWORD}

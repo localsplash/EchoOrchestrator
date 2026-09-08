@@ -18,8 +18,8 @@ The stack has no Identity configuration volume or shared-file startup dependency
 | `DB_*` passed to Web/Service | Process bootstrap; pool changes currently require restart |
 | `PORT`, `MEDIA_ROOT`, volume mounts | Deployment topology; media reader/writer paths must agree |
 
-`SETTINGS_MODE=platform` is explicit in canonical compose. There is no automatic
-SQL fallback after a PlatformConfig failure. Runtime settings are cached for 30
+PlatformConfig is the only supported settings source. The retired
+`SETTINGS_MODE` selector and SQL/IdentityBase fallback readers are removed. Runtime settings are cached for 30
 seconds; process bootstrap (including database pools and listener ports) is not
 hot-reloaded. Platform `trustedCIDR` belongs in `*`; EchoService uses it for its
 webhook policy. Tokens must be available independently of Identity's local files.
@@ -37,48 +37,48 @@ service UIDs may also be needed for media/log-volume ownership; they are no
 longer an Identity shared-file requirement. Do not recursively change live
 volume ownership as part of this configuration cutover.
 
-## Deployment gate and rollback
+## Canonical Dev deployment and cleanup
 
-Merging this prepared configuration into `dev` does not authorize or establish a
-live cutover. Before deploying:
+The owner has explicitly designated `dockerappvm01-dev` as disposable development
+and authorized deletion of obsolete objects. The previous preservation and
+rollback-window requirements do not apply to this Dev cutover. Replace legacy
+readers first, then apply the retirement migration and remove unused stacks;
+do not maintain a second authority or compatibility path for discarded data.
 
-1. Record the current images/commits, compose files and protected `.env`; back up
-   the database with `mysqldump --single-transaction --routines` and export
-   PlatformConfig. Keep the existing database/media volumes and credentials.
-2. Deploy/verify Identity's canonical PlatformConfig and directory/session API.
-   Verify the exact EchoWeb and EchoService images both support platform mode.
-   Follow [EchoService #10](https://github.com/localsplash/EchoService/issues/10)
-   and [EchoWeb #21](https://github.com/localsplash/EchoWeb/issues/21).
-3. Copy reviewed legacy settings to canonical scopes without exposing secrets:
-   Echo SQL `*` generally maps to `echo`, `web` to `echo-web`, and `service` to
-   `echo-service`. Use `*` only for intentionally platform-wide settings such as
-   `PARENT_DOMAIN` and `trustedCIDR`. Empty seed rows do not count as configured.
-   Preserve all legacy rows. Resolve duplicates and verify required keys against
-   each consumer's `SETTING_KEYS` and policy settings.
-4. Provide the three NocoDB inputs above and verify each token can read the named
-   base/table. Existing `.env` files are never overwritten by the installer;
-   append the new values securely. The database's current `MYSQL_PASSWORD` must
-   continue to match its initialized volume; changing `.env` does not rotate it.
-5. Set `ECHO_SERVICE_BASE_URL=http://echo-service:8080` for EchoWeb. Set the public
-   `APP_BASE_URL`, `MEDIA_BASE_URL` (for example `https://media.echo.wisp.net`) and
-   any private media proxy origin in the proper scope. The production overlay no
-   longer silently pins a public media URL over the PlatformConfig value.
-6. Render compose with `docker compose config --quiet`, then run staging startup,
-   settings refresh and deliberate NocoDB-unavailability checks. Validate real
-   sign-in, tenant/number authorization, inbound carrier webhooks, outbound
-   messages and media retrieval before promoting images. Store results in #11.
+1. Build the current `dev` versions of Identity, AidaAdmin, OfficePulse integration
+   and Echo consumers. Verify their unit/build checks before replacement.
+2. Supply each Echo consumer's own NocoDB URL/token, actual DB pool coordinates,
+   and required canonical scoped settings. Set EchoWeb's private
+   `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL`; media access goes through
+   its authenticated proxy. Listener ports and media mount paths stay deployment
+   environment, not hot-reloaded settings.
+3. Recreate the Dev containers and verify Identity, Admin, Echo and OfficePulse
+   API health. OfficePulse PBX inventory needs an actual PBX read account and
+   reviewed tenant mapping; this server does not contain the external PBX.
+4. Apply EchoDatabase's `013_retire_legacy_configuration_and_auth.sql` after
+   deploying consumers without legacy readers. It drops the retired Echo SQL
+   settings, local authentication and ID-mapping tables. Keep the active SMS data
+   and schema ledger; they are current application objects, not rollback copies.
+5. Delete obsolete Aida PBX desired-state tables only with the matching Admin and
+   OfficePulse cleanup, which removes their readers. Remove the unused `aida_db`
+   schema once every runtime consumer points at `aidacalls_db`.
+6. Route the natural Dev hostnames to the canonical containers. Remove old public
+   raw EchoMedia/EchoService proxy objects. Retire the duplicate old Echo,
+   Identity and NocoDB stacks and their unused volumes after resolving actual
+   dependencies. Do not remove a volume still mounted by the canonical services.
+7. Verify central authentication, current tenant/number access, database queries,
+   authenticated media and rejected cross-tenant access. Validate the obsolete
+   objects are absent and record deployed commit/image IDs in issue #11.
 
-For rollback, restore the recorded prior service images **and compose/.env**;
-retain the original Identity configuration volume and legacy NocoDB/SQL rows
-until the rollback deadline. The new compose stops mounting that volume; it does
-not delete it. Current Web/Service also retain an explicit `SETTINGS_MODE=legacy`
-compatibility path, but it must be deliberately configured with its legacy
-NocoDB coordinates and DB environment; never treat an outage as a mode switch.
+The host's active operator Compose files are under `/opt/platform-local/` and its
+protected environment files stay outside source control. Do not print credentials
+or render full secret-bearing Compose configuration in logs. User authorization
+here is for this Dev host, not a destructive reset of other environments or the
+external Asterisk installation.
 
-[EchoDatabase #8](https://github.com/localsplash/EchoDatabase/issues/8) stays blocked
-until all deployed readers are verified, other readers are inventoried and the
-agreed rollback window expires. No DROP migration belongs in this deployment.
-Live validation and rollback-window completion are still outstanding.
+Native PBX call/recording APIs and actual telephony/carrier acceptance remain
+separate features. Their unfinished state does not require retaining obsolete
+Dev tables, old services or a settings compatibility switch.
 
 ## Schema migrations
 
@@ -92,27 +92,25 @@ So a one-shot `echo-migrate` service applies the same files, in order, against
 the database as it actually is, recording each in `echo_tbl_SchemaMigration`.
 `echo-service` and `echo-web` wait on it completing.
 
-The schema files are **not** idempotent — 006/007/008 are bare `ALTER TABLE ...
-ADD COLUMN`, and 001/003 seed lookup tables with bare `INSERT`. The ledger is
-the entire safety mechanism: each file runs exactly once. A database that
-already has the schema but no ledger is therefore **baselined** — every current
-file recorded as applied without being run, loudly, once — because initdb
-already ran them and there is no way to ask MySQL which.
+The numbered application files run once under the ledger. Do not blindly replay
+all current initialization files against an existing database. The retirement
+migration itself is idempotent and removes only its explicit obsolete object
+list. Fresh installations do not recreate the retired auth/settings tables.
 
 ## First install
 
 ```bash
 scripts/install.sh          # writes protected .env once; does not start services
 # Fill in NocoDB URL and both service tokens in .env.
-# Prepare PlatformConfig rows and complete the deployment gate above.
+# Prepare PlatformConfig rows and follow the deployment sequence above.
 docker compose config --quiet
 docker compose up -d --build
 ```
 
 The installer generates MySQL bootstrap passwords for a fresh volume only. It
 never overwrites an existing `.env`, initializes containers or rotates an existing
-database password. Restore the protected original credentials for an existing
-volume; do not run a fresh-install password generation as a recovery procedure.
+database password. Supply credentials matching the current database, or deliberately reset that
+Dev store; changing a password in Compose alone does not change MySQL grants.
 
 ## Stack
 
