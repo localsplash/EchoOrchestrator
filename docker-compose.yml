@@ -9,11 +9,11 @@
 #   - localhost-only published ports remain useful for direct service checks/fallback
 #
 # Configuration model:
-#   Each service reads its settings from echo_tbl_Settings in the Echo
-#   database (EchoDatabase init/009_settings.sql) — rows keyed by sApp, '*'
-#   for every app and 'web'/'service'/'media' for one. This file states only
-#   what cannot describe itself: how to reach that database, and how to reach
-#   the IdentityBase NocoDB base that carries the platform-wide trustedCIDR.
+#   EchoWeb and EchoService read PlatformConfig/cfg_tbl_Setting directly.
+#   Each receives its own NocoDB token; Identity has no shared volume here.
+#   Database pools, listener ports and mounted paths remain deployment bootstrap.
+#   EchoMedia reads only PORT and MEDIA_ROOT and has no SQL settings dependency.
+#   Seed and verify PlatformConfig before deploying this revision (README.md).
 #
 # Expects sibling repo layout:
 #   ../EchoDatabase/   ../EchoService/   ../EchoWeb/   ../EchoMedia/
@@ -80,26 +80,14 @@ services:
     hostname: echo-service
     environment:
       PORT: "8080"
-      # Where echo_tbl_Settings lives. Everything else about this service —
-      # the Bandwidth credentials, CORS origins, the webhook basic-auth pair —
-      # is a row in it, keyed sApp='service'.
+      SETTINGS_MODE: platform
       DB_HOST: echo-database
       DB_USER: ${MYSQL_USER:-echo_app}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       DB_NAME: ${MYSQL_DATABASE:-echo_db}
-      # And where trustedCIDR lives — the one setting read from outside the
-      # Echo database, because a network policy only works if identity and
-      # every application agree on it.
-      #
-      # Both blank on purpose. The identity-config volume below carries
-      # identity's /data/config.json, which holds exactly these two keys, and
-      # EchoService reads it when the environment is silent. Stating them here
-      # would win over the file and put the same secret in a second place.
-      NOCODB_BASE_URL: ${NOCODB_BASE_URL:-}
-      NOCODB_API_TOKEN: ${NOCODB_API_TOKEN:-}
-      # ...unless the deployment pins the network, in which case NocoDB is not
-      # consulted for it at all.
-      IDENTITY_TRUSTED_NETWORK: ${IDENTITY_TRUSTED_NETWORK:-}
+      MEDIA_ROOT: /media
+      NOCODB_BASE_URL: ${NOCODB_BASE_URL:?Set the PlatformConfig NocoDB URL}
+      NOCODB_API_TOKEN: ${ECHO_SERVICE_NOCODB_API_TOKEN:?Set EchoService own NocoDB token}
     depends_on:
       echo-database:
         condition: service_healthy
@@ -107,15 +95,7 @@ services:
         condition: service_completed_successfully
     volumes:
       - echo_media_data:/media
-      # identity's bootstrap file, read-only: this service reads it and must
-      # never write it. Works because both images run as uid 100 and the file
-      # is mode 0600 — pinned deliberately in both Dockerfiles, not by luck.
-      - identity-config:/data:ro
-      # The rotating logs behind EchoService's /logs page. Its own volume
-      # precisely because /data above is read-only: the log viewer's first
-      # attempt was to write there and it could not. Without this the files
-      # still work, but in the container's writable layer, so `up --build`
-      # would silently discard the history the page exists to show.
+      # Keep logs on their own persistent volume across image rebuilds.
       - echo_service_logs:/var/log/echo
     restart: unless-stopped
     networks:
@@ -129,22 +109,13 @@ services:
     environment:
       TZ: America/Los_Angeles
       PORT: "3160"
-      # Where echo_tbl_Settings lives. The OAuth and UISP credentials,
-      # APP_BASE_URL, ECHO_SERVICE_BASE_URL and MEDIA_BASE_URL are rows in
-      # it, keyed sApp='web' (or '*' where every app reads them).
+      SETTINGS_MODE: platform
       DB_HOST: echo-database
       DB_USER: ${MYSQL_USER:-echo_app}
       DB_PASSWORD: ${MYSQL_PASSWORD}
       DB_NAME: ${MYSQL_DATABASE:-echo_db}
-      # And where PARENT_DOMAIN and IDENTITY_CLIENT_SECRET live. Every public
-      # URL this app has is derived from the first, and the second is how it
-      # authenticates to identity's token endpoint. Blank here on purpose: the
-      # identity-config volume below carries them.
-      NOCODB_BASE_URL: ${NOCODB_BASE_URL:-}
-      NOCODB_API_TOKEN: ${NOCODB_API_TOKEN:-}
-    volumes:
-      # identity's bootstrap file, read-only — same file echo-service reads.
-      - identity-config:/data:ro
+      NOCODB_BASE_URL: ${NOCODB_BASE_URL:?Set the PlatformConfig NocoDB URL}
+      NOCODB_API_TOKEN: ${ECHO_WEB_NOCODB_API_TOKEN:?Set EchoWeb own NocoDB token}
     depends_on:
       echo-database:
         condition: service_healthy
@@ -174,12 +145,6 @@ volumes:
   echo_database_data:
   echo_media_data:
   echo_service_logs:
-  # Owned by the identity stack, not this one. `external` means this stack
-  # fails loudly if identity has not been brought up yet — which is the right
-  # order, and a far better failure than inventing a configuration.
-  identity-config:
-    external: true
-    name: ${IDENTITY_CONFIG_VOLUME:-identity_identity-config}
 
 networks:
   echo-net:

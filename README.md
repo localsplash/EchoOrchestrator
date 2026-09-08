@@ -4,65 +4,81 @@ Canonical deployment/orchestration project for the Echo stack.
 
 ## Configuration
 
-Each Echo service reads its settings from **`echo_tbl_Settings` in the Echo
-database** — see EchoDatabase `init/009_settings.sql`. Rows are keyed by
-`sApp`: `'*'` is read by every Echo app, `'web'` / `'service'` / `'media'` by
-one, and an app's own row wins over the general one. Adding an app-specific
-setting is a row, never a new table.
+EchoWeb and EchoService read `PlatformConfig/cfg_tbl_Setting` directly, resolving
+nonblank environment overrides, their own `echo-web` / `echo-service` scope, the
+parent `echo` scope, then `*`. Each service receives its own NocoDB API token.
+The stack has no Identity configuration volume or shared-file startup dependency.
 
-The compose files therefore pass each service only what cannot describe
-itself:
-
-| Passed | Why |
+| Deployment input | Purpose |
 | --- | --- |
-| `DB_HOST` / `DB_USER` / `DB_PASSWORD` / `DB_NAME` | Where `echo_tbl_Settings` lives |
-| `MYSQL_*` (database service only) | The container configures itself; it cannot read its own credentials out of a table it is hosting |
+| `NOCODB_BASE_URL` | Reach the NocoDB instance; base/table IDs are discovered by name |
+| `ECHO_WEB_NOCODB_API_TOKEN` | EchoWeb's NocoDB token, passed as `NOCODB_API_TOKEN` |
+| `ECHO_SERVICE_NOCODB_API_TOKEN` | EchoService's NocoDB token, passed as `NOCODB_API_TOKEN` |
+| `MYSQL_*` | Initialize the MySQL container and provide current Echo pool credentials |
+| `DB_*` passed to Web/Service | Process bootstrap; pool changes currently require restart |
+| `PORT`, `MEDIA_ROOT`, volume mounts | Deployment topology; media reader/writer paths must agree |
 
-That is the whole list, and there is deliberately **no `NOCODB_*`** in this
-repo's `.env`.
+`SETTINGS_MODE=platform` is explicit in canonical compose. There is no automatic
+SQL fallback after a PlatformConfig failure. Runtime settings are cached for 30
+seconds; process bootstrap (including database pools and listener ports) is not
+hot-reloaded. Platform `trustedCIDR` belongs in `*`; EchoService uses it for its
+webhook policy. Tokens must be available independently of Identity's local files.
+A token is not a tenant authorization boundary.
 
-**`trustedCIDR` is the one setting read from outside the Echo database.** It
-is platform-wide network policy that the identity service and every
-application have to agree on, so it is spelled once — in the NocoDB base
-`IdentityBase`, table `auth_tbl_Settings` — rather than as a differently
-named CIDR per service. That base is found by *name* at runtime, never by an
-ID from a config file. Enforce the same value at the NPM/openresty edge.
+EchoMedia reads only `PORT` and `MEDIA_ROOT` from its environment. It never read
+`echo_tbl_Settings`, and needs no NocoDB token for these deployment invariants.
+The old issue premise of migrating an EchoMedia SQL reader is superseded.
 
-Only **EchoService** reads it, to decide which callers may reach the webhook
-endpoints without basic auth. EchoWeb used to fetch it and never look at it,
-which made a NocoDB token a hard requirement for starting; it no longer does
-(EchoWeb#17), so EchoWeb needs nothing but a database.
+Database coordinates remain environment bootstrap in the current EchoWeb and
+EchoService implementations. Moving them into `echo` rows requires a separate
+startup/pool-lifecycle change in both consumers; do not remove their `DB_*` until
+that exists. MySQL always needs its own bootstrap credentials. Existing numeric
+service UIDs may also be needed for media/log-volume ownership; they are no
+longer an Identity shared-file requirement. Do not recursively change live
+volume ownership as part of this configuration cutover.
 
-### How EchoService finds NocoDB
+## Deployment gate and rollback
 
-Not from this `.env`. The identity service already keeps those two keys in
-`config.json` on its own volume, written by its `/setup` wizard — so that
-volume is mounted here read-only and EchoService reads the same file:
+Merging this prepared configuration into `dev` does not authorize or establish a
+live cutover. Before deploying:
 
-```yaml
-volumes:
-  identity-config:
-    external: true
-    name: ${IDENTITY_CONFIG_VOLUME:-identity_identity-config}
-```
+1. Record the current images/commits, compose files and protected `.env`; back up
+   the database with `mysqldump --single-transaction --routines` and export
+   PlatformConfig. Keep the existing database/media volumes and credentials.
+2. Deploy/verify Identity's canonical PlatformConfig and directory/session API.
+   Verify the exact EchoWeb and EchoService images both support platform mode.
+   Follow [EchoService #10](https://github.com/localsplash/EchoService/issues/10)
+   and [EchoWeb #21](https://github.com/localsplash/EchoWeb/issues/21).
+3. Copy reviewed legacy settings to canonical scopes without exposing secrets:
+   Echo SQL `*` generally maps to `echo`, `web` to `echo-web`, and `service` to
+   `echo-service`. Use `*` only for intentionally platform-wide settings such as
+   `PARENT_DOMAIN` and `trustedCIDR`. Empty seed rows do not count as configured.
+   Preserve all legacy rows. Resolve duplicates and verify required keys against
+   each consumer's `SETTING_KEYS` and policy settings.
+4. Provide the three NocoDB inputs above and verify each token can read the named
+   base/table. Existing `.env` files are never overwritten by the installer;
+   append the new values securely. The database's current `MYSQL_PASSWORD` must
+   continue to match its initialized volume; changing `.env` does not rotate it.
+5. Set `ECHO_SERVICE_BASE_URL=http://echo-service:8080` for EchoWeb. Set the public
+   `APP_BASE_URL`, `MEDIA_BASE_URL` (for example `https://media.echo.wisp.net`) and
+   any private media proxy origin in the proper scope. The production overlay no
+   longer silently pins a public media URL over the PlatformConfig value.
+6. Render compose with `docker compose config --quiet`, then run staging startup,
+   settings refresh and deliberate NocoDB-unavailability checks. Validate real
+   sign-in, tenant/number authorization, inbound carrier webhooks, outbound
+   messages and media retrieval before promoting images. Store results in #11.
 
-Set up identity and Echo follows. Nothing to copy, and one place for the token
-rather than two.
+For rollback, restore the recorded prior service images **and compose/.env**;
+retain the original Identity configuration volume and legacy NocoDB/SQL rows
+until the rollback deadline. The new compose stops mounting that volume; it does
+not delete it. Current Web/Service also retain an explicit `SETTINGS_MODE=legacy`
+compatibility path, but it must be deliberately configured with its legacy
+NocoDB coordinates and DB environment; never treat an outage as a mode switch.
 
-Two things this depends on:
-
-- **Order.** The volume is declared `external`, so bringing this stack up
-  before identity fails immediately and says so — which beats inventing a
-  configuration. Bring up identity, finish its `/setup`, then bring up Echo.
-- **uid 100.** identity writes that file mode 0600 as uid 100, so the reader
-  has to *be* uid 100. It is pinned with `adduser -u 100` in identity,
-  EchoService and EchoWeb — a platform invariant, not the coincidence it was
-  when each image independently ran `adduser -S`.
-
-For an EchoService on a *different* host there is no volume to share, so it
-falls back to its own first-run wizard at `/setup`, which asks for the same two
-values. This stack does not try to solve that case; it makes the local one need
-no solving.
+[EchoDatabase #8](https://github.com/localsplash/EchoDatabase/issues/8) stays blocked
+until all deployed readers are verified, other readers are inventoried and the
+agreed rollback window expires. No DROP migration belongs in this deployment.
+Live validation and rollback-window completion are still outstanding.
 
 ## Schema migrations
 
@@ -86,17 +102,17 @@ already ran them and there is no way to ask MySQL which.
 ## First install
 
 ```bash
-scripts/install.sh          # generates .env with database passwords, once
-# bring up identity and complete its /setup wizard
+scripts/install.sh          # writes protected .env once; does not start services
+# Fill in NocoDB URL and both service tokens in .env.
+# Prepare PlatformConfig rows and complete the deployment gate above.
+docker compose config --quiet
 docker compose up -d --build
 ```
 
-`install.sh` never overwrites an existing `.env`: the passwords in it are what
-the database volume was initialised with.
-
-A settings change reaches every running service within 30 seconds, with no
-restart and no redeploy. A service that cannot read its settings retries once
-at startup and then exits saying so; there is no fallback to defaults.
+The installer generates MySQL bootstrap passwords for a fresh volume only. It
+never overwrites an existing `.env`, initializes containers or rotates an existing
+database password. Restore the protected original credentials for an existing
+volume; do not run a fresh-install password generation as a recovery procedure.
 
 ## Stack
 
@@ -154,7 +170,16 @@ The files under `deploy/nginx/` are historical/fallback references only; do not 
 For a second server with different root URL structure:
 
 - update the public hostnames
-- update `MEDIA_BASE_URL`
+- update `MEDIA_BASE_URL` in the appropriate PlatformConfig scope
 - create/update NPM proxy hosts and attach certificates for that environment
 - keep the localhost proxy-port pattern for service checks unless there is a reason to change it
 - preserve external volume strategy if you want durable DB/media state
+
+## PBX boundary
+
+Identity owns business users/tenants and shared-number access. The installed
+OfficePulse/Asterisk PBX owns extensions, queues and applied DID routes, accessed
+through OfficePulseAidaIntegration's API. EchoOrchestrator does not deploy an
+AidaAdmin-to-Asterisk synchronization worker or a separate AidaOfficePbxAdmin.
+AidaAgent and AidaHandset are deferred. Deprecated AidaControl and the historical
+AidaInfrastructureSetupInstructions repository are not deployment dependencies.
