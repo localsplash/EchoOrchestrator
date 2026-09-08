@@ -7,7 +7,7 @@
 #   - Network is external (shared with other Docker stacks)
 #   - Nginx Proxy Manager/openresty is the canonical edge/front door for Echo domains
 #   - echo-web, echo-service, and echo-media publish localhost-only ports for checks/fallback
-#   - MEDIA_BASE_URL points to the public SSL-terminated media domain
+#   - Set MEDIA_BASE_URL in the echo-web PlatformConfig scope before deployment
 
 services:
   echo-database:
@@ -28,8 +28,6 @@ services:
           - echo-service
 
   echo-web:
-    environment:
-      MEDIA_BASE_URL: https://media.echo.wisp.net
     ports:
       - "127.0.0.1:13160:3160"
     networks:
