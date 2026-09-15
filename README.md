@@ -184,9 +184,14 @@ through without credentials. Everyone else must present HTTP Basic using the
 from outside the trusted network, so basic auth is the real path for it; a
 same-host Tychron relay may fall inside the CIDR instead.
 
-`trustedCIDR` is a single platform-wide value in the NocoDB base `IdentityBase`,
-table `auth_tbl_Settings`. identity owns and writes it; EchoService only reads
-it. Enforce the same value at the NPM/openresty edge.
+`trustedCIDR` is a single platform-wide value, held in PlatformConfig
+`cfg_tbl_Setting` under the `*` scope so every application reads the same
+policy. A deployment may pin it instead with the `IDENTITY_TRUSTED_NETWORK`
+environment variable, which wins over the row. Enforce the same value at the
+NPM/openresty edge.
+
+An unset policy means trust nobody — EchoService does not fall back to a
+permissive default, so basic auth becomes the only path in.
 
 **The client address must resolve through the proxy, not the socket peer.** This
 is not a style preference. Behind Nginx Proxy Manager every request arrives from
