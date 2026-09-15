@@ -86,7 +86,7 @@ There is **no plugin API in UCRM 4.5.33** — every `/crm/api/v1.0/plugins` rout
 2. Go to **CRM → System → Plugins**.
 3. Click **Add plugin** (`+`) and upload `echo-sso-plugin.zip`.
 4. Open the plugin and fill in its two config fields:
-   - **Echo Base URL** — `https://echo.X.TLD` — see "Current production instance" in the repository README for the value per environment
+   - **Echo Base URL** — `https://echo.X.TLD` — see "Deployed instances" in the repository README for the value per environment
    - **SSO Shared Secret** — must match `UISP_SSO_SECRET` in Echo's environment
 5. **Enable** the plugin.
 

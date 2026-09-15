@@ -123,7 +123,7 @@ Dev store; changing a password in Compose alone does not change MySQL grants.
 
 Hostnames below are written against `X.TLD`, the whitelabel parent domain a
 deployment serves under. Substitute it throughout. The values in use today are
-recorded in [Current production instance](#current-production-instance).
+recorded in [Deployed instances](#deployed-instances).
 
 At the edge host, the canonical model is:
 
@@ -208,16 +208,32 @@ message — it starts a redelivery loop.
 ### Cutover
 
 Re-registering these URLs in the carrier consoles is an external step, and it is
-the only genuinely risky part of a hostname migration — no repository change can
-do it. Run the old and new hostnames in parallel, move the carriers, confirm
-inbound SMS *and* MMS arrive end to end on the new host, and only then retire the
-old name. Prefer leaving a 301 over deleting the proxy host outright.
+the only genuinely risky part of a hostname change — no repository change can do
+it. Point the carriers at the new host, then confirm inbound SMS *and* MMS
+arrive end to end before deleting the old one. Verify both: MMS exercises the
+10 MB body path that SMS never touches, so an undersized limit passes an
+SMS-only check and then fails on the first photo.
 
-## Current production instance
+## Deployed instances
 
-The concrete values behind `X.TLD` for the deployment running today. Everything
-above is written generically; this is the one place the live specifics are
-recorded.
+Every document here is written against `X.TLD`. This is the one place concrete
+values are recorded. Each environment is an independent parent domain — the
+scheme is what they share, not the domain.
+
+### dev — `localsplash.dev`
+
+| | Value |
+| --- | --- |
+| `PARENT_DOMAIN` | `localsplash.dev` |
+| Application | `echo.localsplash.dev` |
+| Carrier ingress | `webhook.echo.localsplash.dev` — not yet created |
+
+Changes land here first. It already fits the scheme: `echo.localsplash.dev` is
+`echo.X.TLD` with `X.TLD` = `localsplash.dev`. It lacks only a `webhook.` host,
+having no carrier registration of its own. The former `dev-echo.localsplash.ai`
+name is retired.
+
+### production — `wisp.net`
 
 | | Value |
 | --- | --- |
@@ -233,18 +249,30 @@ Retired, or to be retired once the cutover completes:
 | `io.echo.wisp.net` (cert `npm-11`) | superseded by `webhook.echo.wisp.net` |
 | `media.echo.wisp.net` (cert `npm-12`) | retire the proxy host and certificate — EchoMedia is no longer publicly served |
 
-Dev runs under its own parent domain:
+### Adding an instance
 
-| | Value |
-| --- | --- |
-| `PARENT_DOMAIN` | `localsplash.dev` |
-| Application | `echo.localsplash.dev` |
-| Carrier ingress | `webhook.echo.localsplash.dev` — not yet created |
+Further production environments run on their own domains. Nothing in the code
+or these documents needs changing for one — the scheme is the same and every
+public URL derives from `PARENT_DOMAIN`. Per environment:
 
-Dev already fits the scheme: `echo.localsplash.dev` is `echo.X.TLD` with
-`X.TLD` = `localsplash.dev`. It predates this change only in lacking a
-`webhook.` host, since it has no carrier registration of its own. The former
-`dev-echo.localsplash.ai` name is retired.
+1. Set `PARENT_DOMAIN` in that deployment's PlatformConfig `echo` scope.
+2. Point `echo.X.TLD` and `webhook.echo.X.TLD` at the edge host in DNS.
+3. Create both NPM proxy hosts, issue a certificate for each (per-host certs,
+   not a wildcard), and set `client_max_body_size 10m` on the webhook host.
+4. Register the four carrier webhook URLs for that domain — see
+   [Carrier webhook endpoints](#carrier-webhook-endpoints).
+5. Leave the internal service addresses alone unless the Compose service names
+   differ from the defaults. `ECHO_SERVICE_BASE_URL` and
+   `MEDIA_INTERNAL_BASE_URL` are process environment defaulting to
+   `http://echo-service:8080` and `http://echo-media:8082`. They are
+   deliberately not settings rows — where a sibling container answers is
+   Compose's to name, and a row could only drift from the file that assigns it.
+6. Keep the localhost proxy-port pattern for direct service checks, and the
+   external volume strategy if that environment needs durable database and
+   media state.
+
+Do not create a media hostname. EchoMedia is reached only through EchoWeb's
+`/media` route.
 
 ## Docker networks
 
@@ -274,22 +302,6 @@ are per-host certs, not a wildcard, so `webhook.echo.X.TLD` requires a newly
 issued one rather than an edit to an existing SAN list.
 
 The files under `deploy/nginx/` are historical/fallback references only; do not treat them as the canonical production edge unless NPM is intentionally bypassed.
-
-## Deployment portability notes
-
-For a second server with different root URL structure:
-
-- set `PARENT_DOMAIN` in the appropriate PlatformConfig scope; EchoWeb derives
-  its public URLs from it
-- create/update NPM proxy hosts and attach certificates for that environment
-- internal service addresses need no attention unless the Compose service names
-  differ: `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL` are process
-  environment defaulting to `http://echo-service:8080` and
-  `http://echo-media:8082`. They are deliberately not settings rows — where a
-  sibling container answers is Compose's to name, and a row could only drift
-  from the file that assigns it
-- keep the localhost proxy-port pattern for service checks unless there is a reason to change it
-- preserve external volume strategy if you want durable DB/media state
 
 ## PBX boundary
 
