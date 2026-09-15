@@ -209,10 +209,50 @@ message — it starts a redelivery loop.
 
 Re-registering these URLs in the carrier consoles is an external step, and it is
 the only genuinely risky part of a hostname change — no repository change can do
-it. Point the carriers at the new host, then confirm inbound SMS *and* MMS
-arrive end to end before deleting the old one. Verify both: MMS exercises the
-10 MB body path that SMS never touches, so an undersized limit passes an
-SMS-only check and then fails on the first photo.
+it. Point the carriers at the new host, then confirm inbound SMS *and* MMS arrive
+end to end before deleting the old one. Verify both: MMS exercises the 10 MB
+body path that SMS never touches, so an undersized limit passes an SMS-only
+check and then fails on the first photo. `scripts/preflight.sh` checks the edge
+side of this without sending credentials — see [Preflight](#preflight).
+
+## Preflight
+
+```bash
+scripts/preflight.sh X.TLD
+```
+
+Checks one environment end to end and exits non-zero if anything fails, so it
+can gate a deploy. One argument is enough because every public URL derives from
+`PARENT_DOMAIN`.
+
+It verifies that both hostnames resolve, that the certificate served for each
+actually covers that name, that `/healthz` and `/readyz` answer, and that
+`/config.js` advertises `/media` rather than `/api/media` or an external media
+origin. It also checks that `media.echo.X.TLD` is *gone*.
+
+Two checks are worth knowing about:
+
+- **Unauthenticated webhook POSTs must be rejected.** The script sends no
+  credentials to all four endpoints and fails if any answers 2xx. That is the
+  hole that was open before — behind Nginx Proxy Manager every request arrived
+  from the proxy's own address, inside the `172.16.0.0/12` entry of
+  `trustedCIDR`, so the peer check passed for every caller and an
+  unauthenticated POST could write fabricated inbound messages.
+- **A 2 MB body must reach the application.** nginx enforces
+  `client_max_body_size` before the request reaches EchoService, so a 413 here
+  means the edge would reject an ordinary Tychron MMS — which Tychron then
+  redelivers indefinitely. A correct host answers 401/403: the edge accepted
+  the body, the application rejected the credentials.
+
+Both are safe to run against production precisely because they are
+unauthenticated: if the deployment is correct, nothing is written.
+
+Pass NocoDB credentials to also check settings rows, including flagging rows
+that are no longer read:
+
+```bash
+NOCODB_BASE_URL=... NOCODB_API_TOKEN=... scripts/preflight.sh X.TLD
+```
 
 ## Deployed instances
 
@@ -270,6 +310,7 @@ public URL derives from `PARENT_DOMAIN`. Per environment:
 6. Keep the localhost proxy-port pattern for direct service checks, and the
    external volume strategy if that environment needs durable database and
    media state.
+7. Run `scripts/preflight.sh X.TLD` and resolve everything it reports.
 
 Do not create a media hostname. EchoMedia is reached only through EchoWeb's
 `/media` route.
