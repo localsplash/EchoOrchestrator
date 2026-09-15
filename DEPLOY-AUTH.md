@@ -1,28 +1,39 @@
 # Deploying the UISP SSO / identity release to production
 
-Runbook for taking the auth work from dev (`dev-echo.localsplash.ai`) to
-production (`echo.wisp.net`). Written to be followed top to bottom by someone —
+> **⚠ Out of date — verify before following.**
+> This guide predates the Identity cutover. EchoWeb no longer owns provider
+> OAuth: `/auth/google` and `/auth/microsoft` are now bare redirects to
+> `/auth/identity`, and `GOOGLE_CLIENT_ID`, `UISP_BASE_URL`,
+> `UISP_CRM_APP_KEY_READ` and `MICROSOFT_CLIENT_ID` no longer appear in EchoWeb's
+> source at all. The settings table below also uses the retired
+> `echo_tbl_Settings` shape (`sApp`/`sKey`, scope `web`) rather than
+> PlatformConfig `cfg_tbl_Setting` scoped `*` -> `echo` -> `echo-web`.
+> Hostnames have been genericized to `X.TLD`; the content has not been
+> re-verified.
+
+Runbook for taking the auth work from dev (`echo.localsplash.dev`) to
+production (`echo.X.TLD`). Written to be followed top to bottom by someone —
 or some agent — who was not part of building it.
 
 **Read this first:** the login mechanism changes completely. The old
 `businessNumber` cookie stops working, so **every currently logged-in user is
 signed out** and must come back through the UISP client zone or Google. Do this
-in a maintenance window, and make sure someone with an `@wisp.net` Google
+in a maintenance window, and make sure someone with an `@X.TLD` Google
 account is available — that is the only way into the admin view if something
 needs inspecting.
 
-Both environments talk to the **same UISP instance** (`my.wisp.net`). Prod and
+Both environments talk to the **same UISP instance** (`my.UISP.TLD`). Prod and
 dev therefore share the CRM data but must **not** share the SSO secret.
 
 ---
 
 ## 0. Preconditions
 
-- [ ] `https://echo.wisp.net` terminates TLS. The session cookie is `Secure`;
+- [ ] `https://echo.X.TLD` terminates TLS. The session cookie is `Secure`;
       over plain HTTP nothing will log in and the failure looks like a redirect loop.
 - [ ] You can reach the prod host, its Docker stack, and its MySQL.
-- [ ] You have an `@wisp.net` Google account (this becomes a super-admin).
-- [ ] You can log in to `my.wisp.net` as a UISP administrator.
+- [ ] You have an `@X.TLD` Google account (this becomes a super-admin).
+- [ ] You can log in to `my.UISP.TLD` as a UISP administrator.
 - [ ] You have the Google Cloud Console project for the OAuth client.
 
 ---
@@ -61,12 +72,12 @@ In the OAuth 2.0 Client, add the production entries alongside the dev ones:
 
 **Authorized JavaScript origins**
 ```
-https://echo.wisp.net
+https://echo.X.TLD
 ```
 
 **Authorized redirect URIs**
 ```
-https://echo.wisp.net/auth/google/callback
+https://echo.X.TLD/auth/google/callback
 ```
 
 The redirect URI must match `APP_BASE_URL + /auth/google/callback` character for
@@ -135,12 +146,12 @@ UPDATE echo_tbl_Settings SET sValue = ? WHERE sApp = ? AND sKey = ?;
 
 | `sApp` | `sKey` | Value |
 | --- | --- | --- |
-| `web` | `APP_BASE_URL` | `https://echo.wisp.net` |
+| `web` | `APP_BASE_URL` | `https://echo.X.TLD` |
 | `web` | `GOOGLE_CLIENT_ID` | from Google Cloud Console |
 | `web` | `GOOGLE_CLIENT_SECRET` | from Google Cloud Console |
 | `web` | `UISP_SSO_SECRET` | the value generated in step 2 |
 | `web` | `UISP_PLUGIN_URL` | filled in at step 7, after the plugin is installed |
-| `*` | `UISP_BASE_URL` | `https://my.wisp.net` |
+| `*` | `UISP_BASE_URL` | `https://my.UISP.TLD` |
 | `*` | `UISP_CRM_APP_KEY_READ` | read-only CRM App Key |
 
 Use a **read-only** CRM App Key. Echo only reads clients; a read-write key here
@@ -175,7 +186,7 @@ Then in UISP as an administrator:
 
 1. **CRM → System → Plugins → Add plugin**, upload the ZIP.
 2. Configure it:
-   - **Echo Base URL** — `https://echo.wisp.net` (no trailing slash)
+   - **Echo Base URL** — `https://echo.X.TLD` (no trailing slash)
    - **SSO Shared Secret** — the step 2 value, matching `.env` exactly
 3. **Enable** the plugin.
 
@@ -211,7 +222,7 @@ login page — by design, rather than linking somewhere broken.
 cd /opt/echo/EchoOrchestrator
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 docker compose ps
-curl -sS https://echo.wisp.net/healthz
+curl -sS https://echo.X.TLD/healthz
 ```
 
 Expect `{"ok":true,"service":"EchoWeb"}`.
@@ -223,12 +234,12 @@ Expect `{"ok":true,"service":"EchoWeb"}`.
 Confirm config reached the browser (the plugin URL should be populated):
 
 ```bash
-curl -sS https://echo.wisp.net/config.js
+curl -sS https://echo.X.TLD/config.js
 ```
 
 Then walk the paths:
 
-- [ ] **Super-admin** — sign in with an `@wisp.net` Google account. Lands on
+- [ ] **Super-admin** — sign in with an `@X.TLD` Google account. Lands on
       `/internal`. Enter a known business number → messages load.
 - [ ] **Admin view** — `/internal/accounts` lists orgs, users and identities.
 - [ ] **UISP bridge** — from a CRM client with a `hostedPulseNumber`, click
@@ -244,8 +255,8 @@ Optional automated pass (mutates data — use a scratch CRM client, not a live o
 ```bash
 set -a; . /opt/echo/EchoOrchestrator/.env; set +a
 cd /opt/echo/EchoWeb/scripts/manual-tests
-ECHO_BASE_URL=https://echo.wisp.net node identity.js
-ECHO_BASE_URL=https://echo.wisp.net node crm-match.js
+ECHO_BASE_URL=https://echo.X.TLD node identity.js
+ECHO_BASE_URL=https://echo.X.TLD node crm-match.js
 ```
 
 ---
@@ -255,8 +266,8 @@ ECHO_BASE_URL=https://echo.wisp.net node crm-match.js
 Everyone is signed out. Expect support contacts. The message is:
 
 > Echo now signs you in through your ISP account or Google — the phone-number
-> box is gone. Go to `echo.wisp.net` and choose **Sign in with your ISP account**,
-> or click **Echo Messages** in the my.wisp.net client zone.
+> box is gone. Go to `echo.X.TLD` and choose **Sign in with your ISP account**,
+> or click **Echo Messages** in the my.UISP.TLD client zone.
 
 ---
 
@@ -290,7 +301,7 @@ received since the backup.
 | Plugin page shows "not configured" | `ssoSecret` or Echo Base URL blank in the plugin config |
 | `?auth_error=invalid_sso_code` | `UISP_SSO_SECRET` differs from the plugin's secret |
 | `?auth_error=sso_replay` | Code already redeemed — expected on refresh/back; retry from the client zone |
-| `?auth_error=no_account` | CRM lookup failed. Check `UISP_CRM_APP_KEY_READ` and reachability of `my.wisp.net` |
+| `?auth_error=no_account` | CRM lookup failed. Check `UISP_CRM_APP_KEY_READ` and reachability of `my.UISP.TLD` |
 | Client-zone login doesn't auto-return | `public/client-zone.js` not injected — check the client-zone page source for the script tag |
 | Menu icon unstyled | UISP markup changed. Cosmetic only; the link still works |
 | `docker exec` prints nothing | Sandbox swallowing stdout — redirect to a file inside the container and `docker cp` it out |
@@ -300,5 +311,5 @@ received since the backup.
 - Rotate the dev `UISP_SSO_SECRET` if prod ever briefly shared it.
 - The `hostedPulseNumber` CRM attribute is what gates access. A client without
   one gets the no-access page, so set it before onboarding.
-- Super-admin access is any `@wisp.net` Google account. That is the whole
+- Super-admin access is any `@X.TLD` Google account. That is the whole
   authorization check — treat control of that domain accordingly.

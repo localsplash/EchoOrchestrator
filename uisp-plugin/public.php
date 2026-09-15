@@ -31,7 +31,7 @@ if ($echoBaseUrl === '' || $ssoSecret === '') {
 }
 
 // ─── Forward UISP session cookies to /crm/current-user ────────────────────────
-// The browser is on my.wisp.net so its UISP cookies arrive with this request.
+// The browser is on the UISP host so its UISP cookies arrive with this request.
 $sessionId  = $_COOKIE['nms-crm-php-session-id'] ?? '';
 $nmsSession = $_COOKIE['nms-session'] ?? '';
 

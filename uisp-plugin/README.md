@@ -82,11 +82,11 @@ upload; UCRM needs a version change to accept a re-upload as an update.
 
 There is **no plugin API in UCRM 4.5.33** — every `/crm/api/v1.0/plugins` route returns 404. Installation is manual through the admin UI:
 
-1. Log in to `https://my.wisp.net` as a UISP administrator.
+1. Log in to `https://my.UISP.TLD` as a UISP administrator.
 2. Go to **CRM → System → Plugins**.
 3. Click **Add plugin** (`+`) and upload `echo-sso-plugin.zip`.
 4. Open the plugin and fill in its two config fields:
-   - **Echo Base URL** — `https://dev-echo.localsplash.ai` (dev) or `https://echo.wisp.net` (prod)
+   - **Echo Base URL** — `https://echo.X.TLD` — see "Current production instance" in the repository README for the value per environment
    - **SSO Shared Secret** — must match `UISP_SSO_SECRET` in Echo's environment
 5. **Enable** the plugin.
 
@@ -104,7 +104,7 @@ Until `UISP_PLUGIN_URL` is set, the "Sign in with your ISP account" button stays
 
 ## Switching dev → prod
 
-Change **Echo Base URL** in the plugin config to `https://echo.wisp.net` and update `UISP_PLUGIN_URL` on the prod Echo host. Nothing else changes — both environments talk to the same UISP instance.
+Change **Echo Base URL** in the plugin config to the target environment's `https://echo.X.TLD` and update `UISP_PLUGIN_URL` on the prod Echo host. Nothing else changes — both environments talk to the same UISP instance.
 
 ## Security
 

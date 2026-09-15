@@ -20,7 +20,7 @@
     {
       "key": "echoBaseUrl",
       "label": "Echo Base URL",
-      "description": "Base URL of the Echo application, no trailing slash. Dev: https://dev-echo.localsplash.ai  Prod: https://echo.wisp.net",
+      "description": "Base URL of the Echo application, no trailing slash, e.g. https://echo.example.net",
       "required": 1
     },
     {

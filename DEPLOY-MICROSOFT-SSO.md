@@ -1,7 +1,22 @@
 # Deploying Microsoft (Entra ID) sign-in to production
 
+> **⚠ Out of date — verify before following.**
+> This guide predates the Identity cutover. EchoWeb no longer owns provider
+> OAuth: `/auth/google` and `/auth/microsoft` are now bare redirects to
+> `/auth/identity`, and `GOOGLE_CLIENT_ID`, `UISP_BASE_URL`,
+> `UISP_CRM_APP_KEY_READ` and `MICROSOFT_CLIENT_ID` no longer appear in EchoWeb's
+> source at all. The settings table below also uses the retired
+> `echo_tbl_Settings` shape (`sApp`/`sKey`, scope `web`) rather than
+> PlatformConfig `cfg_tbl_Setting` scoped `*` -> `echo` -> `echo-web`.
+> Hostnames have been genericized to `X.TLD`; the content has not been
+> re-verified.
+
+> `isWispStaff`, which this guide cites in `EchoWeb/src/app.ts`, does not
+> exist there any more — SUPER_ADMIN now comes only from the verified
+> central session flag.
+
 Runbook for adding Microsoft as a third login provider on
-`echo.wisp.net`, alongside the Google and UISP paths that are already live.
+`echo.X.TLD`, alongside the Google and UISP paths that are already live.
 
 This is a **delta on top of the auth release** (see `DEPLOY-AUTH.md`), which is
 already deployed to production. It is far smaller than that one, and in two
@@ -19,8 +34,8 @@ Expect ~10 minutes, and it does not need a maintenance window.
 
 ## 0. Preconditions
 
-- [ ] The auth release is live on `echo.wisp.net` (confirm: `curl -sS
-      https://echo.wisp.net/config.js` returns a populated `UISP_PLUGIN_URL`).
+- [ ] The auth release is live on `echo.X.TLD` (confirm: `curl -sS
+      https://echo.X.TLD/config.js` returns a populated `UISP_PLUGIN_URL`).
 - [ ] You are an owner of the Entra app registration in the Wisp directory.
 - [ ] You can reach the prod host, its Docker stack, and its MySQL.
 
@@ -48,7 +63,7 @@ In **Microsoft Entra admin center → App registrations → the Echo app**:
 alongside the dev one:
 
 ```
-https://echo.wisp.net/auth/microsoft/callback
+https://echo.X.TLD/auth/microsoft/callback
 ```
 
 It must equal `APP_BASE_URL + /auth/microsoft/callback` character for
@@ -146,20 +161,20 @@ Sanity-check before restarting:
 grep -E 'APP_BASE_URL|MICROSOFT_' /opt/echo/EchoOrchestrator/.env
 ```
 
-`APP_BASE_URL` must be `https://echo.wisp.net`, or the redirect URI Echo sends
+`APP_BASE_URL` must be `https://echo.X.TLD`, or the redirect URI Echo sends
 will not match what you registered in step 2.
 
 ### Super-admin stays on Google
 
 Microsoft **cannot** grant super-admin, by design. Super-admin is granted on an
-`@wisp.net` address, and Google is the only provider trusted to assert one — it
+`@X.TLD` address, and Google is the only provider trusted to assert one — it
 verifies the Workspace domain it reports. Entra does not: with a `common`
 authority the address is whatever the user's own tenant put there, so any
-directory on earth could mint an `@wisp.net` user. wisp.net is a Google
+directory on earth could mint an `@X.TLD` user. X.TLD is a Google
 Workspace domain and staff stay on Google, so Microsoft never reaches that
 branch (`isWispStaff` in `EchoWeb/src/app.ts`).
 
-A wisp.net person who signs in with Microsoft is treated as an ordinary user
+An X.TLD person who signs in with Microsoft is treated as an ordinary user
 and, having no membership, is turned away with `?auth_error=no_membership`.
 That is expected — tell staff to use **Continue with Google**.
 
@@ -177,7 +192,7 @@ claim if orgs ever need stricter control.
 cd /opt/echo/EchoOrchestrator
 docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 docker compose ps
-curl -sS https://echo.wisp.net/healthz
+curl -sS https://echo.X.TLD/healthz
 ```
 
 Expect `{"ok":true,"service":"EchoWeb"}`.
@@ -189,7 +204,7 @@ Expect `{"ok":true,"service":"EchoWeb"}`.
 Confirm the flag reached the browser:
 
 ```bash
-curl -sS https://echo.wisp.net/config.js
+curl -sS https://echo.X.TLD/config.js
 ```
 
 Expect `"MICROSOFT_ENABLED":true` alongside the existing keys.
@@ -197,11 +212,11 @@ Expect `"MICROSOFT_ENABLED":true` alongside the existing keys.
 Confirm the authorize redirect is well-formed:
 
 ```bash
-curl -sS -D - -o /dev/null https://echo.wisp.net/auth/microsoft | grep -i '^location'
+curl -sS -D - -o /dev/null https://echo.X.TLD/auth/microsoft | grep -i '^location'
 ```
 
 The `redirect_uri` in that URL must be
-`https%3A%2F%2Fecho.wisp.net%2Fauth%2Fmicrosoft%2Fcallback`.
+`https%3A%2F%2Fecho.X.TLD%2Fauth%2Fmicrosoft%2Fcallback`.
 
 Then walk the paths in a browser:
 
@@ -215,7 +230,7 @@ Then walk the paths in a browser:
       straight in, no duplicate org created (check `/internal/accounts`).
 - [ ] **Linking** — from **Settings → Sign-in Methods → Link Microsoft**, attach
       a Microsoft account to an existing user, sign out, sign back in with it.
-- [ ] **Super-admin unaffected** — an `@wisp.net` **Google** account still lands
+- [ ] **Super-admin unaffected** — an `@X.TLD` **Google** account still lands
       on `/internal`. Microsoft cannot grant super-admin; that is intentional.
 - [ ] **No regressions** — Google sign-in and the UISP client-zone bridge still
       work. Both share the refactored callback, so give each one pass.
@@ -255,15 +270,15 @@ would also roll back any messages received since the backup.
 | Symptom | Cause |
 |---|---|
 | Microsoft button missing on the login page | `MICROSOFT_CLIENT_ID` empty, or the container wasn't restarted after editing `.env` |
-| `AADSTS50011` redirect URI mismatch | Prod callback not registered, or `APP_BASE_URL` isn't `https://echo.wisp.net` |
+| `AADSTS50011` redirect URI mismatch | Prod callback not registered, or `APP_BASE_URL` isn't `https://echo.X.TLD` |
 | `AADSTS50194` application not multi-tenant | Supported account types is single-tenant; `MICROSOFT_TENANT=common` requires multitenant + personal |
 | `AADSTS7000215` invalid client secret | The **Secret ID** was pasted instead of the **Value** |
 | `AADSTS7000222` client secret expired | Issue a new secret in Entra and update `.env` |
 | `?auth_error=token_exchange_failed` | Secret wrong/expired, or the prod host cannot reach `login.microsoftonline.com` |
 | `?auth_error=userinfo_failed` | The `id_token` carried no usable address — the account has neither an `email` nor an email-shaped `preferred_username` |
 | `?auth_error=invalid_state` | Session expired mid-login, or the state cookie was minted for the other provider; retry |
-| `@wisp.net` account signing in with Microsoft gets `no_membership` | Expected — super-admin is Google-only. Use **Continue with Google** |
-| `?auth_error=no_account` | CRM lookup threw. Check `UISP_CRM_APP_KEY_READ` and reachability of `my.wisp.net` |
+| `@X.TLD` account signing in with Microsoft gets `no_membership` | Expected — super-admin is Google-only. Use **Continue with Google** |
+| `?auth_error=no_account` | CRM lookup threw. Check `UISP_CRM_APP_KEY_READ` and reachability of `my.UISP.TLD` |
 | Duplicate org appears for an existing subscriber | The CRM client had no prior org and the address matched a different client — inspect via `/internal/accounts` |
 
 ## After cutover

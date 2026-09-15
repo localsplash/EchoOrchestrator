@@ -233,8 +233,18 @@ Retired, or to be retired once the cutover completes:
 | `io.echo.wisp.net` (cert `npm-11`) | superseded by `webhook.echo.wisp.net` |
 | `media.echo.wisp.net` (cert `npm-12`) | retire the proxy host and certificate — EchoMedia is no longer publicly served |
 
-Dev runs under a different parent domain (`dev-echo.localsplash.ai`) and has not
-been migrated to this scheme.
+Dev runs under its own parent domain:
+
+| | Value |
+| --- | --- |
+| `PARENT_DOMAIN` | `localsplash.dev` |
+| Application | `echo.localsplash.dev` |
+| Carrier ingress | `webhook.echo.localsplash.dev` — not yet created |
+
+Dev already fits the scheme: `echo.localsplash.dev` is `echo.X.TLD` with
+`X.TLD` = `localsplash.dev`. It predates this change only in lacking a
+`webhook.` host, since it has no carrier registration of its own. The former
+`dev-echo.localsplash.ai` name is retired.
 
 ## Docker networks
 
