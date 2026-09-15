@@ -121,7 +121,11 @@ Dev store; changing a password in Compose alone does not change MySQL grants.
 
 ## Production model
 
-On `proxy.wisp.net`, the canonical edge model is:
+Hostnames below are written against `X.TLD`, the whitelabel parent domain a
+deployment serves under. Substitute it throughout. The values in use today are
+recorded in [Current production instance](#current-production-instance).
+
+At the edge host, the canonical model is:
 
 - **Nginx Proxy Manager/openresty** owns the public Echo hostnames and TLS termination
 - **EchoOrchestrator** runs the containers on the shared `echo-net` Docker network so NPM can proxy directly to service names
@@ -129,9 +133,108 @@ On `proxy.wisp.net`, the canonical edge model is:
 
 ## Hostname mapping
 
-- `echo.wisp.net` → NPM/openresty → `echo-web:3160`
-- `io.echo.wisp.net` → NPM/openresty → `echo-service:8080`
-- `media.echo.wisp.net` → NPM/openresty → `echo-media:8082`
+- `echo.X.TLD` → NPM/openresty → `echo-web:3160`
+- `webhook.echo.X.TLD` → NPM/openresty → `echo-service:8080`
+
+Two public hostnames, not three. Each names the surface it exposes rather than
+the repository behind it:
+
+- `echo.X.TLD` is the application. EchoService's API reaches browsers through
+  EchoWeb's `/api/*` routes over the internal network, so EchoService needs no
+  public name of its own for that traffic.
+- `webhook.echo.X.TLD` exists only for carrier ingress — see
+  [Carrier webhook endpoints](#carrier-webhook-endpoints). It replaces the
+  former `io.echo.X.TLD`, which named the repo rather than its one public
+  surface.
+- **EchoMedia has no public hostname.** Attachments are served through EchoWeb's
+  session-gated same-origin `/media` route, which rechecks membership and
+  stored-path ownership on every request. The former `media.echo.X.TLD` proxy
+  host should be retired: neither carrier ever fetches from it (Bandwidth
+  uploads to its own media store and hands back a `messaging.bandwidth.com`
+  URL; Tychron sends bytes inline), so after the EchoWeb cutover it serves
+  nobody.
+
+## Carrier webhook endpoints
+
+These are the URLs to configure in the Bandwidth and Tychron consoles. All four
+are `POST`, all are served by EchoService, and all live under
+`webhook.echo.X.TLD` — no other EchoService endpoint is publicly reachable.
+
+| Provider | Method | Path |
+| --- | --- | --- |
+| Bandwidth | `POST` | `/webhooks/bandwidth/inbound` |
+| Bandwidth | `POST` | `/webhooks/bandwidth/status` |
+| Tychron | `POST` | `/webhooks/tychron/sms` |
+| Tychron | `POST` | `/webhooks/tychron/mms` |
+
+Full URLs:
+
+```
+https://webhook.echo.X.TLD/webhooks/bandwidth/inbound
+https://webhook.echo.X.TLD/webhooks/bandwidth/status
+https://webhook.echo.X.TLD/webhooks/tychron/sms
+https://webhook.echo.X.TLD/webhooks/tychron/mms
+```
+
+### Authentication
+
+A caller whose address falls inside the platform-wide `trustedCIDR` is allowed
+through without credentials. Everyone else must present HTTP Basic using the
+`WEBHOOK_BASIC_USER` and `WEBHOOK_BASIC_PASS` settings. Bandwidth reaches Echo
+from outside the trusted network, so basic auth is the real path for it; a
+same-host Tychron relay may fall inside the CIDR instead.
+
+`trustedCIDR` is a single platform-wide value in the NocoDB base `IdentityBase`,
+table `auth_tbl_Settings`. identity owns and writes it; EchoService only reads
+it. Enforce the same value at the NPM/openresty edge.
+
+**The client address must resolve through the proxy, not the socket peer.** This
+is not a style preference. Behind Nginx Proxy Manager every request arrives from
+the proxy's own address on the Docker network, which falls inside the
+`172.16.0.0/12` entry of `trustedCIDR` — so the peer check passed for *every*
+caller and basic auth was not enforced at all. An unauthenticated
+`curl -X POST https://<host>/webhooks/tychron/sms` answered 204 and could write
+fabricated inbound messages straight into the database.
+
+### Body size
+
+The edge must allow 10 MB (`client_max_body_size 10m`), matching EchoService's
+own `express.json` limit. Tychron carries MMS media inline as base64, which adds
+about a third to a file whose per-item ceiling is already 2 MB, so nginx's 1 MB
+default would `413` an ordinary photo. Tychron treats any non-2xx as a temporary
+failure and redelivers indefinitely, so an undersized limit does not drop one
+message — it starts a redelivery loop.
+
+### Cutover
+
+Re-registering these URLs in the carrier consoles is an external step, and it is
+the only genuinely risky part of a hostname migration — no repository change can
+do it. Run the old and new hostnames in parallel, move the carriers, confirm
+inbound SMS *and* MMS arrive end to end on the new host, and only then retire the
+old name. Prefer leaving a 301 over deleting the proxy host outright.
+
+## Current production instance
+
+The concrete values behind `X.TLD` for the deployment running today. Everything
+above is written generically; this is the one place the live specifics are
+recorded.
+
+| | Value |
+| --- | --- |
+| `PARENT_DOMAIN` | `wisp.net` |
+| Edge host | `proxy.wisp.net` |
+| Application | `echo.wisp.net` → cert `npm-9` |
+| Carrier ingress | `webhook.echo.wisp.net` → **new certificate required** |
+
+Retired, or to be retired once the cutover completes:
+
+| Hostname | Status |
+| --- | --- |
+| `io.echo.wisp.net` (cert `npm-11`) | superseded by `webhook.echo.wisp.net` |
+| `media.echo.wisp.net` (cert `npm-12`) | retire the proxy host and certificate — EchoMedia is no longer publicly served |
+
+Dev runs under a different parent domain (`dev-echo.localsplash.ai`) and has not
+been migrated to this scheme.
 
 ## Docker networks
 
@@ -155,11 +258,10 @@ docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 
 ## NPM configs
 
-Live NPM proxy-host records on `proxy.wisp.net` should be the source of truth for the Echo edge.
-
-- `echo.wisp.net` uses Let's Encrypt cert id/path `npm-9`
-- `io.echo.wisp.net` uses Let's Encrypt cert id/path `npm-11`
-- `media.echo.wisp.net` uses Let's Encrypt cert id/path `npm-12`
+Live NPM proxy-host records on the edge host are the source of truth for the
+Echo edge. Each public hostname needs its own Let's Encrypt certificate — these
+are per-host certs, not a wildcard, so `webhook.echo.X.TLD` requires a newly
+issued one rather than an edit to an existing SAN list.
 
 The files under `deploy/nginx/` are historical/fallback references only; do not treat them as the canonical production edge unless NPM is intentionally bypassed.
 
@@ -167,9 +269,15 @@ The files under `deploy/nginx/` are historical/fallback references only; do not 
 
 For a second server with different root URL structure:
 
-- update the public hostnames
-- update `MEDIA_BASE_URL` in the appropriate PlatformConfig scope
+- set `PARENT_DOMAIN` in the appropriate PlatformConfig scope; EchoWeb derives
+  its public URLs from it
 - create/update NPM proxy hosts and attach certificates for that environment
+- internal service addresses need no attention unless the Compose service names
+  differ: `ECHO_SERVICE_BASE_URL` and `MEDIA_INTERNAL_BASE_URL` are process
+  environment defaulting to `http://echo-service:8080` and
+  `http://echo-media:8082`. They are deliberately not settings rows — where a
+  sibling container answers is Compose's to name, and a row could only drift
+  from the file that assigns it
 - keep the localhost proxy-port pattern for service checks unless there is a reason to change it
 - preserve external volume strategy if you want durable DB/media state
 

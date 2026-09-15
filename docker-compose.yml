@@ -4,7 +4,7 @@
 # Prod: docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
 #
 # Production edge model:
-#   - Nginx Proxy Manager/openresty on proxy.wisp.net is the canonical TLS/front-door layer
+#   - Nginx Proxy Manager/openresty on the edge host is the canonical TLS/front-door layer
 #   - Echo services join shared echo-net so NPM can reverse proxy by container DNS name
 #   - localhost-only published ports remain useful for direct service checks/fallback
 #

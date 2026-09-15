@@ -7,7 +7,8 @@
 #   - Network is external (shared with other Docker stacks)
 #   - Nginx Proxy Manager/openresty is the canonical edge/front door for Echo domains
 #   - echo-web, echo-service, and echo-media publish localhost-only ports for checks/fallback
-#   - Set MEDIA_BASE_URL in the echo-web PlatformConfig scope before deployment
+#   - EchoMedia has no public hostname and no NPM entry: browsers reach media
+#     through EchoWeb's own session-gated /media route
 
 services:
   echo-database:
